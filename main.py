@@ -1,7 +1,7 @@
 import pyxel
 
 W = 256
-H = 256
+H = 320
 
 FRONT, MIDDLE, BACK = 0, 1, 2
 ROWS = ["F ATK", "M SUP", "B REC"]
@@ -96,6 +96,9 @@ class Game:
         self.effect_log = []
         self.action_tags = {}
         self.turn_damage = 0
+        self.events = []
+        self.event_index = -1
+        self.paused = False
         self.run()
 
     def run(self):
@@ -114,6 +117,9 @@ class Game:
         self.boss_max_hp = boss["hp"]
         self.turn = 1
         self.select = 0
+        self.events = []
+        self.event_index = -1
+        self.paused = False
         self.state = "READY"
         self.attack_log = ["PRESS START"]
         self.effect_log = ["F=ATTACK", "M=SUPPORT", "B=RECOVER"]
@@ -124,26 +130,33 @@ class Game:
         if self.state == "TITLE":
             self.update_title()
         elif self.state == "READY":
-            if pyxel.btnp(pyxel.KEY_Z) or pyxel.btnp(pyxel.KEY_RETURN) or self.clicked(88, 226, 80, 22):
+            if pyxel.btnp(pyxel.KEY_Z) or pyxel.btnp(pyxel.KEY_RETURN) or self.clicked(88, 290, 80, 22):
                 self.resolve_turn()
+        elif self.state == "PLAYBACK":
+            self.update_playback()
         elif self.state == "DECISION":
             if pyxel.btnp(pyxel.KEY_LEFT) or pyxel.btnp(pyxel.KEY_A):
                 self.select = 0
             if pyxel.btnp(pyxel.KEY_RIGHT) or pyxel.btnp(pyxel.KEY_D):
                 self.select = 1
-            if self.clicked(16, 226, 102, 22):
+            if self.clicked(16, 290, 102, 22):
                 self.select = 0
                 self.commit_decision()
-            elif self.clicked(138, 226, 102, 22):
+            elif self.clicked(138, 290, 102, 22):
                 self.select = 1
                 self.commit_decision()
             elif pyxel.btnp(pyxel.KEY_Z) or pyxel.btnp(pyxel.KEY_RETURN):
                 self.commit_decision()
         elif self.state in ("WIN", "LOSE"):
-            if pyxel.btnp(pyxel.KEY_R) or pyxel.btnp(pyxel.KEY_Z) or self.clicked(73, 226, 110, 22):
+            if pyxel.btnp(pyxel.KEY_R) or pyxel.btnp(pyxel.KEY_Z) or self.clicked(73, 290, 110, 22):
                 self.reset_battle()
             if pyxel.btnp(pyxel.KEY_X):
                 self.state = "TITLE"
+        if self.state in ("DECISION", "WIN", "LOSE") and self.events:
+            if pyxel.btnp(pyxel.KEY_UP) or self.clicked(8, 258, 114, 24):
+                self.event_index = max(0, self.event_index - 1)
+            elif pyxel.btnp(pyxel.KEY_DOWN) or self.clicked(134, 258, 114, 24):
+                self.event_index = min(len(self.events) - 1, self.event_index + 1)
         if pyxel.btnp(pyxel.KEY_Q):
             pyxel.quit()
 
@@ -194,7 +207,60 @@ class Game:
         if len(tags) > 2:
             del tags[0]
 
+    def snapshot(self):
+        return (self.boss_hp, [(u.hp, u.mid_ready) for u in self.units.values()],
+                [row[:] for row in self.formation],
+                {k: v[:] for k, v in self.action_tags.items()}, self.turn_damage)
+
+    def restore(self, snapshot):
+        self.boss_hp, units, formation, tags, self.turn_damage = snapshot
+        for unit, (hp, ready) in zip(self.units.values(), units):
+            unit.hp, unit.mid_ready = hp, ready
+        self.formation = [row[:] for row in formation]
+        self.action_tags = {k: v[:] for k, v in tags.items()}
+
+    def record(self, source, target, kind, amount, detail=""):
+        self.events.append(dict(source=source, target=target, kind=kind,
+                                amount=amount, detail=detail, snapshot=self.snapshot()))
+
     def resolve_turn(self, prefix=None):
+        # Calculate once, then replay exact state snapshots in action order.
+        self.events = []
+        self.action_tags = {}
+        self.turn_damage = 0
+        initial = self.snapshot()
+        self.calculate_turn(prefix)
+        self.final_snapshot = self.snapshot()
+        self.final_state = self.state
+        if self.events:
+            self.restore(initial)
+            self.state = "PLAYBACK"
+            self.event_index = -1
+            self.paused = False
+            self.advance_event()
+
+    def advance_event(self):
+        self.event_index += 1
+        if self.event_index >= len(self.events):
+            self.event_index = len(self.events) - 1
+            self.restore(self.final_snapshot)
+            self.state = self.final_state
+            return
+        self.restore(self.events[self.event_index]["snapshot"])
+        self.event_ticks = 0
+
+    def update_playback(self):
+        if pyxel.btnp(pyxel.KEY_SPACE) or self.clicked(8, 258, 114, 24):
+            self.paused = not self.paused
+        if pyxel.btnp(pyxel.KEY_Z) or pyxel.btnp(pyxel.KEY_RETURN) or self.clicked(134, 258, 114, 24):
+            self.advance_event()
+            return
+        if not self.paused:
+            self.event_ticks += 1
+            if self.event_ticks >= 40:
+                self.advance_event()
+
+    def calculate_turn(self, prefix=None):
         if self.state in ("WIN", "LOSE"):
             return
 
@@ -258,27 +324,33 @@ class Game:
                         support_text = f" +{mid.mid_value}"
                         self.add_tag(mkey, f"SUP+{mid.mid_value}")
                         self.effect_log.append(f"{mid.name} -> {front.name} +{mid.mid_value}")
+                        self.record(mkey, fkey, "SUPPORT", mid.mid_value, "ATTACK BONUS")
                 dealt = max(1, int(round(dmg * mult)))
-                self.boss_hp -= dealt
+                self.boss_hp = max(0, self.boss_hp - dealt)
                 total += dealt
                 self.add_tag(fkey, f"ATK{dealt}")
                 armor = " ARMOR" if mult < 1.0 else ""
                 self.attack_log.append(f"{front.name} {dealt}DMG{support_text}{armor}")
+                self.turn_damage = total
+                self.record(fkey, "BOSS", "DAMAGE", dealt, "ARMOR x0.2" if mult < 1 else "FRONT ATTACK")
             elif mkey is not None:
                 mid = self.units[mkey]
                 if mid.alive and mid.mid_kind == "RANGED":
                     dealt = max(1, int(round(mid.mid_value * mult)))
-                    self.boss_hp -= dealt
+                    self.boss_hp = max(0, self.boss_hp - dealt)
                     total += dealt
                     self.add_tag(mkey, f"RNG{dealt}")
                     armor = " ARMOR" if mult < 1.0 else ""
                     self.attack_log.append(f"{mid.name} RNG {dealt}DMG{armor}")
+                    self.turn_damage = total
+                    self.record(mkey, "BOSS", "DAMAGE", dealt, "RANGED / ARMOR x0.2" if mult < 1 else "RANGED ATTACK")
         return total
 
     def enemy_phase(self):
         name, power, kind = self.current_enemy_action()
         if power <= 0 or kind == "none":
             self.effect_log.append(f"ENEMY {name}: NO DAMAGE")
+            self.record("BOSS", "BOSS", "WAIT", 0, name)
             return
 
         fronts = []
@@ -311,10 +383,15 @@ class Game:
                 mid.mid_ready = False
                 self.add_tag(mkey, f"DEF-{reduction}")
                 self.effect_log.append(f"{mid.name} GUARD -{reduction}")
+                self.record(mkey, target.key, "GUARD", reduction, "DAMAGE REDUCTION")
         dmg = max(1, power - reduction)
-        target.hp -= dmg
+        target.hp = max(0, target.hp - dmg)
         self.add_tag(target.key, f"HIT-{dmg}")
         self.effect_log.append(f"{target.name} -{dmg}HP")
+        detail = self.current_enemy_action()[0]
+        if not target.alive:
+            detail += " / DOWN"
+        self.record("BOSS", target.key, "DAMAGE", dmg, detail)
 
     def back_phase(self):
         for c in range(4):
@@ -336,6 +413,7 @@ class Game:
                             amount = u.hp - old
                             self.add_tag(u.key, f"+{amount}HP")
                             self.effect_log.append(f"SERA -> {u.name} +{amount}")
+                            self.record("S", u.key, "HEAL", amount, "LINE RECOVERY")
                             healed_any = True
                 if healed_any:
                     self.add_tag("S", "HEAL")
@@ -346,6 +424,7 @@ class Game:
                     amount = back.hp - old
                     self.add_tag(bkey, f"REC+{amount}")
                     self.effect_log.append(f"{back.name} REC +{amount}")
+                    self.record(bkey, bkey, "HEAL", amount, "SELF RECOVERY")
 
     def cleanup_dead(self):
         for r in range(3):
@@ -417,14 +496,11 @@ class Game:
 
         pyxel.rect(6, 36, 244, 33, 0)
         pyxel.rectb(6, 36, 244, 33, 5)
-        pyxel.text(10, 40, "ENEMY PLAN", 6)
+        pyxel.text(10, 40, "NEXT ENEMY PLAN" if self.state == "DECISION" else "ENEMY PLAN", 6)
         for i in range(3):
-            if i == 0:
-                name, pwr, kind = self.current_enemy_action()
-                t = self.turn
-            else:
-                name, pwr, kind = self.next_enemy_action(i)
-                t = self.turn + i
+            offset = i + (1 if self.state == "DECISION" else 0)
+            name, pwr, kind = self.next_enemy_action(offset)
+            t = self.turn + offset
             extra = " ALL" if kind == "aoe" else ""
             pyxel.text(10 + i * 79, 51, f"T{t} {name}", 10 if i == 0 else 7)
             pyxel.text(10 + i * 79, 60, f"{pwr}DMG{extra}", 8 if pwr >= 36 else 6)
@@ -432,7 +508,7 @@ class Game:
         gx, gy = 8, 75
         cell_w, cell_h = 57, 32
         for r in range(3):
-            pyxel.text(1, gy + r * cell_h + 11, ROWS[r], 6)
+            pyxel.text(2, gy + r * cell_h + 8, ["FRONT", "MID", "BACK"][r], 6)
             for c in range(4):
                 x = 27 + c * cell_w
                 y = gy + r * cell_h
@@ -457,39 +533,91 @@ class Game:
                         suffix = " R" if u.mid_ready else " x"
                     pyxel.text(x + 3, y + 19, (role + suffix)[:12], 6)
 
-        if self.boss_index == 2:
-            status = "CORE OPEN x1.0" if self.turn % 3 == 0 else "ARMOR x0.2"
-            pyxel.text(167, 171, status, 10 if self.turn % 3 == 0 else 6)
-
-        pyxel.rect(6, 174, 244, 47, 0)
-        pyxel.rectb(6, 174, 244, 47, 5)
-        pyxel.line(128, 174, 128, 220, 5)
-        pyxel.text(10, 178, f"ALLY DAMAGE {self.turn_damage}", 10)
-        pyxel.text(133, 178, "EFFECTS", 6)
-        for i, line in enumerate(self.attack_log[:5]):
-            pyxel.text(10, 187 + i * 7, line[:28], 7 if i == 0 else 6)
-        for i, line in enumerate(self.effect_log[:5]):
-            pyxel.text(133, 187 + i * 7, line[:27], 7 if "ENEMY" in line else 6)
+        self.draw_action_panel()
 
         if self.state == "READY":
-            self.button(88, 226, 80, 22, "START", True)
+            self.button(88, 290, 80, 22, "START", True)
         elif self.state == "DECISION":
-            self.button(16, 226, 102, 22, "ROTATE", self.select == 0)
-            self.button(138, 226, 102, 22, "STAY", self.select == 1)
+            self.button(16, 290, 102, 22, "ROTATE", self.select == 0)
+            self.button(138, 290, 102, 22, "STAY", self.select == 1)
+        elif self.state == "PLAYBACK":
+            pyxel.text(44, 298, "WATCH ACTIONS / Z TO ADVANCE", 6)
         elif self.state == "WIN":
             pyxel.rect(55, 91, 146, 52, 0)
             pyxel.rectb(55, 91, 146, 52, 10)
             pyxel.text(104, 102, "VICTORY", 10)
             pyxel.text(77, 116, f"TURN {self.turn} / ALIVE {self.alive_count()}", 7)
             pyxel.text(67, 130, "R OR TAP TO RETRY", 6)
-            self.button(73, 226, 110, 22, "RETRY", True)
+            self.button(73, 290, 110, 22, "RETRY", True)
         elif self.state == "LOSE":
             pyxel.rect(55, 91, 146, 52, 0)
             pyxel.rectb(55, 91, 146, 52, 8)
             pyxel.text(108, 102, "DEFEAT", 8)
             pyxel.text(77, 116, f"TURN {self.turn} / ALIVE {self.alive_count()}", 7)
             pyxel.text(67, 130, "R OR TAP TO RETRY", 6)
-            self.button(73, 226, 110, 22, "RETRY", True)
+            self.button(73, 290, 110, 22, "RETRY", True)
+
+    def actor_name(self, key):
+        return BOSS_DATA[self.boss_index]["name"] if key == "BOSS" else self.units[key].name
+
+    def actor_position(self, key):
+        if key == "BOSS":
+            return (128, 19)
+        for r, row in enumerate(self.formation):
+            if key in row:
+                return (53 + row.index(key) * 57, 89 + r * 32)
+        return None
+
+    def draw_action_panel(self):
+        pyxel.rect(6, 174, 244, 78, 0)
+        pyxel.rectb(6, 174, 244, 78, 5)
+        if not self.events:
+            pyxel.text(12, 182, "FRONT: ATTACK  MID: SUPPORT  BACK: RECOVER", 6)
+            pyxel.text(12, 198, "ACTIONS PLAY ONE AT A TIME.", 7)
+            pyxel.text(12, 214, "YELLOW: ACTOR   RED: DAMAGE   GREEN: HEAL", 6)
+            return
+        event = self.events[self.event_index]
+        source, target = event["source"], event["target"]
+        kind, amount = event["kind"], event["amount"]
+        color = 8 if kind == "DAMAGE" else 11 if kind == "HEAL" else 10
+        live = self.state == "PLAYBACK"
+        mode = "PAUSED" if live and self.paused else "ACTION" if live else "HISTORY"
+        pyxel.text(12, 180, f"{mode} {self.event_index + 1}/{len(self.events)}", 10)
+        pyxel.text(162, 180, f"TURN DMG {self.turn_damage}", 6)
+        pyxel.text(12, 193, f"{self.actor_name(source)} -> {self.actor_name(target)}", 7)
+        result = f"{amount} DAMAGE" if kind == "DAMAGE" else f"+{amount} HP" if kind == "HEAL" else f"{kind} {amount}" if kind != "WAIT" else "NO ATTACK"
+        pyxel.text(12, 205, result, color)
+        pyxel.text(12, 217, event["detail"], 6)
+        if self.event_index:
+            prev = self.events[self.event_index - 1]
+            pyxel.text(12, 237, f"PREV: {self.actor_name(prev['source'])}>{self.actor_name(prev['target'])} {prev['kind']} {prev['amount']}", 5)
+        if live:
+            a, b = self.actor_position(source), self.actor_position(target)
+            if a and b:
+                pyxel.line(*a, *b, color)
+                if a != b:
+                    import math
+                    angle = math.atan2(b[1] - a[1], b[0] - a[0])
+                    for offset in (-0.5, 0.5):
+                        pyxel.line(*b, b[0] - 7 * math.cos(angle + offset), b[1] - 7 * math.sin(angle + offset), color)
+                for key, point, border in ((source, a, 10), (target, b, color)):
+                    if key == "BOSS":
+                        pyxel.rectb(5, 15, 246, 9, border)
+                    else:
+                        pyxel.rectb(point[0] - 27, point[1] - 15, 54, 30, border)
+                label = f"-{amount}" if kind == "DAMAGE" else f"+{amount}" if kind in ("HEAL", "SUPPORT") else kind
+                x = max(2, min(252 - len(label) * 4, b[0] - len(label) * 2))
+                y = b[1] - 10
+                if target != "BOSS":
+                    label = f"-{amount}" if kind in ("DAMAGE", "GUARD") else f"+{amount}"
+                    x, y = b[0] + 8, b[1] - 4
+                pyxel.rect(x - 2, y - 2, len(label) * 4 + 4, 10, 0)
+                pyxel.text(x, y, label, color)
+            self.button(8, 258, 114, 24, "RESUME" if self.paused else "PAUSE", False)
+            self.button(134, 258, 114, 24, "NEXT >", True)
+        else:
+            self.button(8, 258, 114, 24, "< PREV LOG", False)
+            self.button(134, 258, 114, 24, "NEXT LOG >", False)
 
     def button(self, x, y, w, h, label, active):
         pyxel.rect(x, y, w, h, 5 if active else 2)
@@ -505,4 +633,5 @@ class Game:
         pyxel.rectb(x, y, w, h, 7)
 
 
-Game()
+if __name__ == "__main__":
+    Game()
