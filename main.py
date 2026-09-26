@@ -4,7 +4,7 @@ W = 256
 H = 256
 
 FRONT, MIDDLE, BACK = 0, 1, 2
-ROWS = ["FRONT", "MIDDLE", "BACK"]
+ROWS = ["F ATK", "M SUP", "B REC"]
 
 
 class Unit:
@@ -88,11 +88,14 @@ class Game:
         self.boss_index = 0
         self.state = "TITLE"
         self.select = 0
-        self.log = []
         self.turn = 1
         self.boss_hp = 1
         self.boss_max_hp = 1
         self.formation = [[None] * 4 for _ in range(3)]
+        self.attack_log = []
+        self.effect_log = []
+        self.action_tags = {}
+        self.turn_damage = 0
         self.run()
 
     def run(self):
@@ -112,7 +115,10 @@ class Game:
         self.turn = 1
         self.select = 0
         self.state = "READY"
-        self.log = ["PRESS Z / TAP START"]
+        self.attack_log = ["PRESS START"]
+        self.effect_log = ["F=ATTACK", "M=SUPPORT", "B=RECOVER"]
+        self.action_tags = {}
+        self.turn_damage = 0
 
     def update(self):
         if self.state == "TITLE":
@@ -163,46 +169,60 @@ class Game:
         )
 
     def commit_decision(self):
+        choice = "ROTATE" if self.select == 0 else "STAY"
         if self.select == 0:
             self.rotate()
-            self.log = ["ROTATE"]
-        else:
-            self.log = ["STAY"]
         self.turn += 1
-        self.resolve_turn()
+        self.resolve_turn(prefix=choice)
 
     def rotate(self):
         old = [row[:] for row in self.formation]
         self.formation[FRONT] = old[MIDDLE]
         self.formation[MIDDLE] = old[BACK]
         self.formation[BACK] = old[FRONT]
-        # Entering middle refreshes one-shot support.
         for c in range(4):
             key = self.formation[MIDDLE][c]
             if key is not None and old[MIDDLE][c] != key:
                 self.units[key].mid_ready = True
 
-    def resolve_turn(self):
+    def add_tag(self, key, text):
+        if key is None:
+            return
+        tags = self.action_tags.setdefault(key, [])
+        if text not in tags:
+            tags.append(text)
+        if len(tags) > 2:
+            del tags[0]
+
+    def resolve_turn(self, prefix=None):
         if self.state in ("WIN", "LOSE"):
             return
-        self.log = []
+
+        self.attack_log = []
+        self.effect_log = []
+        self.action_tags = {}
+        self.turn_damage = 0
+        if prefix:
+            self.effect_log.append(prefix)
+
         total = self.ally_phase()
+        self.turn_damage = total
         if self.boss_hp <= 0:
             self.boss_hp = 0
             self.state = "WIN"
-            self.log.append("BOSS DOWN!")
+            self.effect_log.append("BOSS DOWN!")
             return
 
         if self.front_count() == 0:
             self.state = "LOSE"
-            self.log.append("FRONT LINE BROKEN")
+            self.effect_log.append("FRONT LINE BROKEN")
             return
 
         self.enemy_phase()
         self.cleanup_dead()
         if self.alive_count() == 0 or self.front_count() == 0:
             self.state = "LOSE"
-            self.log.append("PARTY DOWN")
+            self.effect_log.append("PARTY DOWN")
             return
 
         self.back_phase()
@@ -211,10 +231,9 @@ class Game:
         boss = BOSS_DATA[self.boss_index]
         if boss.get("deadline") and self.turn >= boss["deadline"] and self.boss_hp > 0:
             self.state = "LOSE"
-            self.log.append("FULL CRYSTALLIZE")
+            self.effect_log.append("FULL CRYSTALLIZE")
             return
 
-        self.log.insert(0, f"PARTY DMG {total}")
         self.state = "DECISION"
         self.select = 0
 
@@ -230,27 +249,36 @@ class Game:
             if fkey is not None and self.units[fkey].alive:
                 front = self.units[fkey]
                 dmg = front.front_atk
+                support_text = ""
                 if mkey is not None:
                     mid = self.units[mkey]
                     if mid.alive and mid.mid_kind == "ATK" and mid.mid_ready:
                         dmg += mid.mid_value
                         mid.mid_ready = False
-                        self.log.append(f"{mid.name} ATK+{mid.mid_value}")
+                        support_text = f" +{mid.mid_value}"
+                        self.add_tag(mkey, f"SUP+{mid.mid_value}")
+                        self.effect_log.append(f"{mid.name} -> {front.name} +{mid.mid_value}")
                 dealt = max(1, int(round(dmg * mult)))
                 self.boss_hp -= dealt
                 total += dealt
+                self.add_tag(fkey, f"ATK{dealt}")
+                armor = " ARMOR" if mult < 1.0 else ""
+                self.attack_log.append(f"{front.name} {dealt}DMG{support_text}{armor}")
             elif mkey is not None:
                 mid = self.units[mkey]
                 if mid.alive and mid.mid_kind == "RANGED":
                     dealt = max(1, int(round(mid.mid_value * mult)))
                     self.boss_hp -= dealt
                     total += dealt
+                    self.add_tag(mkey, f"RNG{dealt}")
+                    armor = " ARMOR" if mult < 1.0 else ""
+                    self.attack_log.append(f"{mid.name} RNG {dealt}DMG{armor}")
         return total
 
     def enemy_phase(self):
         name, power, kind = self.current_enemy_action()
-        self.log.append(f"ENEMY {name}")
         if power <= 0 or kind == "none":
+            self.effect_log.append(f"ENEMY {name}: NO DAMAGE")
             return
 
         fronts = []
@@ -261,13 +289,16 @@ class Game:
             return
 
         if kind == "aoe":
+            self.effect_log.append(f"ENEMY {name}: FRONT ALL")
             for c, unit in fronts:
                 self.apply_enemy_damage(c, unit, power)
         elif kind == "high":
             c, unit = max(fronts, key=lambda x: (x[1].hp, -x[0]))
+            self.effect_log.append(f"ENEMY {name} -> {unit.name}")
             self.apply_enemy_damage(c, unit, power)
         else:
             c, unit = min(fronts, key=lambda x: (x[1].hp, x[0]))
+            self.effect_log.append(f"ENEMY {name} -> {unit.name}")
             self.apply_enemy_damage(c, unit, power)
 
     def apply_enemy_damage(self, col, target, power):
@@ -278,10 +309,12 @@ class Game:
             if mid.alive and mid.mid_kind == "DEF" and mid.mid_ready:
                 reduction = mid.mid_value
                 mid.mid_ready = False
-                self.log.append(f"{mid.name} DEF-{reduction}")
+                self.add_tag(mkey, f"DEF-{reduction}")
+                self.effect_log.append(f"{mid.name} GUARD -{reduction}")
         dmg = max(1, power - reduction)
         target.hp -= dmg
-        self.log.append(f"{target.name} -{dmg}")
+        self.add_tag(target.key, f"HIT-{dmg}")
+        self.effect_log.append(f"{target.name} -{dmg}HP")
 
     def back_phase(self):
         for c in range(4):
@@ -292,6 +325,7 @@ class Game:
             if not back.alive:
                 continue
             if bkey == "S":
+                healed_any = False
                 for r in (FRONT, MIDDLE):
                     key = self.formation[r][c]
                     if key is not None and self.units[key].alive:
@@ -299,12 +333,19 @@ class Game:
                         old = u.hp
                         u.hp = min(u.max_hp, u.hp + 4)
                         if u.hp > old:
-                            self.log.append(f"SERA HEAL {u.name}+{u.hp-old}")
+                            amount = u.hp - old
+                            self.add_tag(u.key, f"+{amount}HP")
+                            self.effect_log.append(f"SERA -> {u.name} +{amount}")
+                            healed_any = True
+                if healed_any:
+                    self.add_tag("S", "HEAL")
             elif back.back_heal > 0:
                 old = back.hp
                 back.hp = min(back.max_hp, back.hp + back.back_heal)
                 if back.hp > old:
-                    self.log.append(f"{back.name} +{back.hp-old}")
+                    amount = back.hp - old
+                    self.add_tag(bkey, f"REC+{amount}")
+                    self.effect_log.append(f"{back.name} REC +{amount}")
 
     def cleanup_dead(self):
         for r in range(3):
@@ -327,6 +368,23 @@ class Game:
 
     def front_count(self):
         return sum(1 for key in self.formation[FRONT] if key is not None and self.units[key].alive)
+
+    def role_text(self, r, unit):
+        if r == FRONT:
+            return f"ATK {unit.front_atk}"
+        if r == MIDDLE:
+            if unit.mid_kind == "ATK":
+                return f"SUP +{unit.mid_value}"
+            if unit.mid_kind == "DEF":
+                return f"DEF -{unit.mid_value}"
+            if unit.mid_kind == "RANGED":
+                return f"RNG {unit.mid_value}"
+            return "NO ACT"
+        if unit.key == "S":
+            return "HEAL 4"
+        if unit.back_heal > 0:
+            return f"REC {unit.back_heal}"
+        return "NO ACT"
 
     def draw(self):
         pyxel.cls(1)
@@ -354,10 +412,11 @@ class Game:
         pyxel.text(172, 5, f"ALIVE {self.alive_count()}/7", 7)
         self.draw_bar(6, 16, 244, 7, self.boss_hp, self.boss_max_hp, 8, 2)
         pyxel.text(8, 26, f"HP {self.boss_hp}/{self.boss_max_hp}", 7)
+        if self.turn_damage > 0:
+            pyxel.text(174, 26, f"TURN -{self.turn_damage}", 10)
 
-        # Enemy forecast
-        pyxel.rect(6, 36, 244, 35, 0)
-        pyxel.rectb(6, 36, 244, 35, 5)
+        pyxel.rect(6, 36, 244, 33, 0)
+        pyxel.rectb(6, 36, 244, 33, 5)
         pyxel.text(10, 40, "ENEMY PLAN", 6)
         for i in range(3):
             if i == 0:
@@ -367,42 +426,50 @@ class Game:
                 name, pwr, kind = self.next_enemy_action(i)
                 t = self.turn + i
             extra = " ALL" if kind == "aoe" else ""
-            pyxel.text(10 + i * 79, 52, f"T{t} {name}", 10 if i == 0 else 7)
-            pyxel.text(10 + i * 79, 61, f"DMG {pwr}{extra}", 8 if pwr >= 36 else 6)
+            pyxel.text(10 + i * 79, 51, f"T{t} {name}", 10 if i == 0 else 7)
+            pyxel.text(10 + i * 79, 60, f"{pwr}DMG{extra}", 8 if pwr >= 36 else 6)
 
-        # Formation grid
-        gx, gy = 8, 81
-        cell_w, cell_h = 57, 34
+        gx, gy = 8, 75
+        cell_w, cell_h = 57, 32
         for r in range(3):
-            pyxel.text(8, gy + r * cell_h + 11, ROWS[r][0], 6)
+            pyxel.text(1, gy + r * cell_h + 11, ROWS[r], 6)
             for c in range(4):
-                x = 18 + c * cell_w
+                x = 27 + c * cell_w
                 y = gy + r * cell_h
-                pyxel.rect(x, y, 52, 29, 0)
-                pyxel.rectb(x, y, 52, 29, 13 if r == FRONT else (9 if r == MIDDLE else 12))
+                pyxel.rect(x, y, 52, 28, 0)
+                pyxel.rectb(x, y, 52, 28, 13 if r == FRONT else (9 if r == MIDDLE else 12))
                 key = self.formation[r][c]
                 if key is None:
-                    pyxel.text(x + 20, y + 11, "--", 5)
+                    pyxel.text(x + 20, y + 10, "--", 5)
                     continue
                 u = self.units[key]
-                pyxel.text(x + 3, y + 3, u.name[:6], 7)
+                pyxel.text(x + 3, y + 2, u.name[:6], 7)
                 hp_col = 8 if u.hp <= u.max_hp * 0.35 else 11
-                pyxel.text(x + 3, y + 12, f"{max(0,u.hp):02}/{u.max_hp:02}", hp_col)
-                if r == MIDDLE and u.mid_kind:
-                    flag = "R" if u.mid_ready else "x"
-                    pyxel.text(x + 37, y + 20, flag, 10 if u.mid_ready else 5)
-                self.draw_bar(x + 3, y + 22, 32, 3, max(0, u.hp), u.max_hp, 11, 2)
+                pyxel.text(x + 3, y + 10, f"{max(0,u.hp):02}/{u.max_hp:02}", hp_col)
+                tags = self.action_tags.get(key, [])
+                if tags:
+                    text = "/".join(tags)
+                    pyxel.text(x + 3, y + 19, text[:12], 10)
+                else:
+                    role = self.role_text(r, u)
+                    suffix = ""
+                    if r == MIDDLE and u.mid_kind:
+                        suffix = " R" if u.mid_ready else " x"
+                    pyxel.text(x + 3, y + 19, (role + suffix)[:12], 6)
 
-        # Calcite armor status
         if self.boss_index == 2:
             status = "CORE OPEN x1.0" if self.turn % 3 == 0 else "ARMOR x0.2"
-            pyxel.text(167, 185, status, 10 if self.turn % 3 == 0 else 6)
+            pyxel.text(167, 171, status, 10 if self.turn % 3 == 0 else 6)
 
-        # Log
-        pyxel.rect(6, 186, 156, 35, 0)
-        pyxel.rectb(6, 186, 156, 35, 5)
-        for i, line in enumerate(self.log[:4]):
-            pyxel.text(10, 190 + i * 7, line[:24], 7 if i == 0 else 6)
+        pyxel.rect(6, 174, 244, 47, 0)
+        pyxel.rectb(6, 174, 244, 47, 5)
+        pyxel.line(128, 174, 128, 220, 5)
+        pyxel.text(10, 178, f"ALLY DAMAGE {self.turn_damage}", 10)
+        pyxel.text(133, 178, "EFFECTS", 6)
+        for i, line in enumerate(self.attack_log[:5]):
+            pyxel.text(10, 187 + i * 7, line[:28], 7 if i == 0 else 6)
+        for i, line in enumerate(self.effect_log[:5]):
+            pyxel.text(133, 187 + i * 7, line[:27], 7 if "ENEMY" in line else 6)
 
         if self.state == "READY":
             self.button(88, 226, 80, 22, "START", True)
