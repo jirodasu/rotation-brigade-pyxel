@@ -1,0 +1,73 @@
+# ROTATION BRIGADE - Pyxel Prototype
+
+隊列をローテーションしながら戦う、予測型フォーメーションバトルの最小プロトタイプです。
+
+## ブラウザで遊ぶ
+
+Pyxel Web Launcher:
+
+https://kitao.github.io/pyxel/wasm/launcher/?run=jirodasu.rotation-brigade-pyxel.main&gamepad=enabled
+
+※ GitHub 側の反映や Pyxel Web Launcher の読み込み状況によって、公開直後は少し反映に時間がかかる場合があります。
+
+## コア要素
+
+- 3×4フォーメーション
+- 固定7人パーティ
+- FRONT: 攻撃
+- MIDDLE: 攻撃補助 / 防御補助 / 遠距離攻撃
+- BACK: 自己回復 / ライン回復
+- 戦闘中の基本判断は `ROTATE` / `STAY` の2択
+- 中列補助は使い切りで、再度MIDDLEへ入ると再充填
+- 敵の行動予定を事前表示
+- 乱数なし
+
+## ボス
+
+1. **GOLM** - 誰に攻撃を受けさせ、いつ後ろへ下げるか
+2. **VALGA** - 大技時の前列人数をどう調整するか
+3. **CALCITE** - 弱点露出ターンに高火力陣形を合わせるか
+
+## ローカル実行
+
+Python 3.x と Pyxel 2.x が必要です。
+
+```bash
+pip install pyxel
+pyxel run main.py
+```
+
+環境によっては次でも起動できます。
+
+```bash
+python main.py
+```
+
+## 操作
+
+### タイトル
+- `↑ / ↓`: ボス選択
+- `Z / Enter`: 決定
+- マウス / タップ: ボスを直接選択
+
+### 戦闘
+- `Z / Enter`: 戦闘開始
+- `← / →` または `A / D`: ROTATE / STAY 選択
+- `Z / Enter`: 決定
+- 画面下ボタン: マウス / タップ操作
+- `R`: 勝敗後リトライ
+- `X`: 勝敗画面からタイトルへ
+- `Q`: 終了
+
+## 現在の制限
+
+- 戦闘前の自由配置は未実装で、初期配置は固定です。
+- 演出は最小限です。まず ROTATE / STAY の攻略性を検証する版です。
+- スマホWeb版では環境によりタップがマウス入力として扱われます。
+
+## 次に追加する候補
+
+- 戦闘前の7人自由配置
+- ROTATE後の予想与ダメ / 予想被ダメ表示
+- ボスごとのチュートリアル
+- 戦績記録
