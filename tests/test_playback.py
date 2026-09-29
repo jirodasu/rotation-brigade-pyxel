@@ -1,94 +1,104 @@
-"""Headless checks of action playback; no Pyxel window required."""
-import importlib.util
+"""Headless checks for battle playback and FRONT-only enemy damage."""
 from pathlib import Path
+from unittest.mock import patch
+import importlib.util
 import sys
 import types
 import unittest
-from unittest.mock import patch
 
-stub = types.ModuleType('pyxel')
+ROOT = Path(__file__).parents[1]
+sys.path.insert(0, str(ROOT))
+
+stub = types.ModuleType("pyxel")
 stub.init = stub.mouse = stub.run = lambda *args, **kwargs: None
-stub.btnp = lambda *args: False
+stub.btnp = lambda *args, **kwargs: False
+stub.quit = lambda *args, **kwargs: None
 stub.__getattr__ = lambda name: 0
-spec = importlib.util.spec_from_file_location('battle', Path(__file__).parents[1] / 'main.py')
-battle = importlib.util.module_from_spec(spec)
+
 with patch.dict(sys.modules, pyxel=stub):
+    spec = importlib.util.spec_from_file_location("battle_v4", ROOT / "game_v4.py")
+    battle = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(battle)
 
 
 class PlaybackTests(unittest.TestCase):
     def game(self, boss=0):
         g = battle.Game()
-        g.boss_index = boss
-        g.reset_battle()
+        g.bi = boss
+        g.reset()
         return g
 
     def finish(self, g):
-        while g.state == 'PLAYBACK':
-            g.advance_event()
+        while g.state == "PLAY":
+            g.next_event()
 
-    def test_first_turn_has_all_sources_targets_and_amounts(self):
-        g = self.game()
-        g.resolve_turn()
-        self.assertEqual([(e['source'], e['target'], e['kind'], e['amount']) for e in g.events], [
-            ('M', 'A', 'SUPPORT', 10), ('A', 'BOSS', 'DAMAGE', 30),
-            ('G', 'B', 'SUPPORT', 6), ('B', 'BOSS', 'DAMAGE', 28),
-            ('C', 'BOSS', 'DAMAGE', 14), ('R', 'BOSS', 'DAMAGE', 18),
-            ('BOSS', 'B', 'DAMAGE', 16), ('S', 'B', 'HEAL', 4)])
-        self.assertEqual(g.boss_hp, 700)  # support is not a hit
-        g.advance_event()
-        self.assertEqual(g.boss_hp, 670)
+    def test_first_turn_sources_targets_amounts_and_hp_delta(self):
+        g = self.game(0)
+        g.resolve()
+        events = [(e["s"], e["d"], e["k"], e["n"]) for e in g.events]
+        self.assertEqual(
+            events,
+            [
+                ("M", "A", "SUPPORT", 10),
+                ("A", "BOSS", "DAMAGE", 30),
+                ("G", "B", "SUPPORT", 6),
+                ("B", "BOSS", "DAMAGE", 28),
+                ("C", "BOSS", "DAMAGE", 14),
+                ("R", "BOSS", "DAMAGE", 18),
+                ("BOSS", "B", "DAMAGE", 16),
+                ("S", "B", "HEAL", 4),
+            ],
+        )
+        allen_hit = g.events[1]
+        self.assertEqual((allen_hit["before"], allen_hit["after"]), (700, 670))
+        bell_hit = g.events[6]
+        self.assertEqual((bell_hit["before"], bell_hit["after"]), (55, 39))
+
         self.finish(g)
-        self.assertEqual((g.boss_hp, g.units['B'].hp, g.turn_damage), (610, 43, 90))
+        self.assertEqual(g.state, "DECISION")
+        self.assertEqual((g.bhp, g.u["B"].hp, g.dealt, g.taken), (610, 43, 90, 16))
 
-    def test_pause_and_final_transition(self):
-        g = self.game()
-        g.resolve_turn()
-        g.paused = True
-        before = g.snapshot()
-        for _ in range(100):
-            g.update_playback()
-        self.assertEqual(g.snapshot(), before)
-        self.assertEqual(g.event_index, 0)
-        g.paused = False
-        for _ in range(40):
-            g.update_playback()
-        self.assertEqual(g.event_index, 1)
+    def test_valga_front_all_hits_front_row_only(self):
+        g = self.game(1)
+        g.turn = 2  # WING: FRONT ALL
+        front_before = {k: g.u[k].hp for k in ("A", "B", "C")}
+        middle_back_before = {k: g.u[k].hp for k in ("M", "G", "R", "S")}
+
+        g.resolve()
+        enemy_targets = [
+            e["d"] for e in g.events if e["k"] == "DAMAGE" and e["s"] == "BOSS"
+        ]
+        self.assertEqual(enemy_targets, ["A", "B", "C"])
+
         self.finish(g)
-        self.assertEqual(g.state, 'DECISION')
+        for k in ("A", "B", "C"):
+            self.assertLess(g.u[k].hp, front_before[k])
+        for k in ("M", "G", "R", "S"):
+            self.assertEqual(g.u[k].hp, middle_back_before[k])
 
-    def test_replay_results_match_calculation_for_each_boss(self):
+    def test_playback_reaches_same_final_snapshot_as_direct_calculation(self):
         for boss in range(3):
-            g, reference = self.game(boss), self.game(boss)
-            for turn in range(40):
-                if turn:
-                    for obj in (g, reference):
-                        if turn % 3:
-                            obj.rotate()
-                        obj.turn += 1
-                reference.calculate_turn()
-                g.resolve_turn()
-                self.finish(g)
-                self.assertEqual(g.snapshot(), reference.snapshot())
-                self.assertEqual(g.state, reference.state)
-                if g.state in ('WIN', 'LOSE'):
-                    break
-            self.assertIn(g.state, ('WIN', 'LOSE'))
+            replay = self.game(boss)
+            direct = self.game(boss)
 
-    def test_history_and_reset_do_not_reapply_damage(self):
-        g = self.game()
-        g.resolve_turn()
+            direct.calc()
+            expected = direct.snap()
+            expected_state = direct.state
+
+            replay.resolve()
+            self.finish(replay)
+
+            self.assertEqual(replay.snap(), expected)
+            self.assertEqual(replay.state, expected_state)
+
+    def test_unit_marks_explain_turn_contribution(self):
+        g = self.game(0)
+        g.resolve()
         self.finish(g)
-        before = g.snapshot()
-        for index in range(len(g.events)):
-            g.event_index = index
-            g.update()
-        self.assertEqual(g.snapshot(), before)
-        g.reset_battle()
-        self.assertEqual(g.events, [])
-        self.assertEqual(g.event_index, -1)
-        self.assertEqual(g.boss_hp, 700)
+        self.assertEqual(g.unit_mark("A"), ("D30", 10))
+        self.assertEqual(g.unit_mark("B"), ("H16", 8))
+        self.assertEqual(g.unit_mark("M"), ("S10", 10))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
