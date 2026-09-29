@@ -1,3 +1,3 @@
-from game_v2 import Game
+from game_v3 import Game
 
 Game()
