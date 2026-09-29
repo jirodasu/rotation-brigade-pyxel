@@ -1,3 +1,3 @@
-from game_v4 import Game
+from game_jp import Game
 
 Game()
