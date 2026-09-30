@@ -1,13 +1,54 @@
 import pyxel
+from game_v3 import Unit
 from game_jp import Game as JapaneseGame
+from jp_embedded_font import GLYPH, ROWS
 
-CHARS = '→、あうかけしすずせそただつでとなにのはへまみめもらりるわをんァアイウカガキクコゴサシジスセタダッテトドブプベボマミムメャョラルレロンヴ・ー一上下与中人体作使停全再出列別利前力助動勝北単合味員回団囲圧在基壊大始害対少巨常度弱強弾当待後御復急戦打援撃操支攻敗敵方旅旋時晶最本果機次止残殻済減溜火灼点烈熱爪獣現用甲砕破示空竜第範粉結翼行表被装補見計象距転軽通遠選量鉄開闘防降隊離露風！（）＋－／：？ＨＰ'
-GLYPH = {ch: i for i, ch in enumerate(CHARS)}
+W, H = 300, 430
 CELL = 12
 COLS = 16
 
-
 class Game(JapaneseGame):
+    def __init__(self):
+        pyxel.init(W, H, title="回転旅団", fps=30)
+        pyxel.mouse(True)
+
+        # Build the Japanese glyph atlas entirely in memory.
+        atlas = pyxel.image(1)
+        atlas.cls(0)
+        for i, glyph in enumerate(ROWS):
+            sx = (i % COLS) * CELL
+            sy = (i // COLS) * CELL
+            for yy, bits in enumerate(glyph):
+                for xx in range(CELL):
+                    if bits & (1 << (11 - xx)):
+                        atlas.pset(sx + xx, sy + yy, 7)
+
+        self.u = {
+            "A": Unit("A", "ALLEN", 60, 20, 16),
+            "B": Unit("B", "BELL", 55, 22, 14),
+            "C": Unit("C", "CLAUDE", 75, 14, 20, "DEF", 10),
+            "M": Unit("M", "MIRA", 48, 12, 12, "ATK", 10),
+            "S": Unit("S", "SERA", 75, 8, 0, "DEF", 6),
+            "R": Unit("R", "RAIN", 50, 14, 10, "RANGED", 18),
+            "G": Unit("G", "GALD", 55, 17, 16, "ATK", 6),
+        }
+        self.bi = 0
+        self.state = "TITLE"
+        self.sel = 0
+        self.events = []
+        self.ei = -1
+        self.tick = 0
+        self.paused = False
+        self.turn = 1
+        self.bhp = 1
+        self.bmax = 1
+        self.form = [[None] * 4 for _ in range(3)]
+        self.dealt = 0
+        self.taken = 0
+        self.final = None
+        self.final_state = "READY"
+        pyxel.run(self.update, self.draw)
+
     def text_width(self, text, scale=1):
         return sum((10 if ch in GLYPH else 4) * scale for ch in str(text))
 
@@ -20,12 +61,12 @@ class Game(JapaneseGame):
                 sx = (i % COLS) * CELL
                 sy = (i // COLS) * CELL
                 if scale == 1:
-                    pyxel.blt(cx, y, 1, sx, sy, 12, 12, 0)
+                    pyxel.blt(cx, y, 1, sx, sy, CELL, CELL, 0)
                     cx += 10
                 else:
-                    for yy in range(12):
-                        for xx in range(12):
-                            if pyxel.image(1).get(sx + xx, sy + yy) != 0:
+                    for yy, bits in enumerate(ROWS[i]):
+                        for xx in range(CELL):
+                            if bits & (1 << (11 - xx)):
                                 pyxel.rect(cx + xx * scale, y + yy * scale, scale, scale, col)
                     cx += 10 * scale
             else:
