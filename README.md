@@ -4,7 +4,7 @@
 
 ## ブラウザで遊ぶ
 
-https://kitao.github.io/pyxel/wasm/launcher/?run=jirodasu.rotation-brigade-pyxel.main
+https://kitao.github.io/pyxel/wasm/launcher/?run=jirodasu.rotation-brigade-pyxel.main_jp
 
 スマホはタップ、パソコンはマウス操作のみで遊べます。ゲーム内で矢印キーや決定キーは使いません。
 
@@ -29,6 +29,7 @@ https://kitao.github.io/pyxel/wasm/launcher/?run=jirodasu.rotation-brigade-pyxel
 ## 表示・演出
 
 - 画面内テキストを日本語化
+- 日本語字形はPythonコード内に埋め込み、外部フォントや画像に依存しない
 - 攻撃者から対象へ軌跡を表示
 - 対象位置にダメージ／回復量を大きく表示
 - 行動ごとに「誰から誰へ」「何ダメージ／何回復」を表示
@@ -67,7 +68,7 @@ Python 3.x と Pyxel 2.x が必要です。
 
 ```bash
 pip install pyxel
-pyxel run main.py
+pyxel run main_jp.py
 ```
 
 ## 次に追加する候補
