@@ -4,7 +4,9 @@
 
 ## ブラウザで遊ぶ
 
-https://kitao.github.io/pyxel/launcher/?run=jirodasu.rotation-brigade-pyxel.main_jp_fixed_jp_fixed_jp
+※ Pyxel 2.8以降のURL形式を使用（/pyxel/web/launcher/ と、ユーザー/リポジトリ/ブランチ/ファイル名）。
+
+https://kitao.github.io/pyxel/web/launcher/?run=jirodasu/rotation-brigade-pyxel/main/main_jp_fixed
 
 スマホはタップ、パソコンはマウス操作のみで遊べます。ゲーム内で矢印キーや決定キーは使いません。
 
