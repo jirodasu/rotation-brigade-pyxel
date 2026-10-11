@@ -13,15 +13,18 @@ class Game(JapaneseGame):
         pyxel.mouse(True)
 
         # Build the Japanese glyph atlas entirely in memory.
+        # Use only Image.set(), which is part of Pyxel's documented Web API.
         atlas = pyxel.image(1)
-        atlas.cls(0)
         for i, glyph in enumerate(ROWS):
             sx = (i % COLS) * CELL
             sy = (i // COLS) * CELL
-            for yy, bits in enumerate(glyph):
-                for xx in range(CELL):
-                    if bits & (1 << (11 - xx)):
-                        atlas.pset(sx + xx, sy + yy, 7)
+            pixels = []
+            for bits in glyph:
+                pixels.append("".join(
+                    "7" if bits & (1 << (11 - xx)) else "0"
+                    for xx in range(CELL)
+                ))
+            atlas.set(sx, sy, pixels)
 
         self.u = {
             "A": Unit("A", "ALLEN", 60, 20, 16),
