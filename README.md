@@ -4,11 +4,12 @@
 
 ## ブラウザで遊ぶ
 
-※ Pyxel 2.8以降のURL形式を使用（/pyxel/web/launcher/ と、ユーザー/リポジトリ/ブランチ/ファイル名）。
+**[回転旅団・日本語ブラウザ版をプレイ](https://app-u8bnc8.v2.appdeploy.ai/)**
 
-https://kitao.github.io/pyxel/web/launcher/?run=jirodasu/rotation-brigade-pyxel/main/main_jp_fixed
+こちらは公式Pyxel Launcherを使わず独立して公開したブラウザ版です。iPhoneのタップ・パソコンのマウスだけで遊べます。元のPyxel版と同じ7人・3ボス・隊列ローテーション戦闘をJavaScriptで再現したものです。
 
-スマホはタップ、パソコンはマウス操作のみで遊べます。ゲーム内で矢印キーや決定キーは使いません。
+- **ブラウザ版**: https://app-u8bnc8.v2.appdeploy.ai/
+- **Pyxel版**: Pythonコードは従来どおりこのリポジトリに保存。公式Launcherへの直リンクはアクセス不能だったため撤去しました。
 
 ## コア要素
 
